@@ -26,10 +26,10 @@ export default function LoginPage() {
       password: formData.password,
     });
 
-    if (result.error) {
-      setError("Invalid email or password");
-    } else {
+    if (result.ok) {
       router.push("/");
+    } else {
+      setError(result.error || "Login failed. Please check your credentials.");
     }
   };
 

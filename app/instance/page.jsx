@@ -41,6 +41,42 @@ export default function InstancePage() {
     }
   }, [session]);
 
+  const handleDeleteInstance = async (instanceId) => {
+    if (
+      !confirm(
+        "Are you sure you want to delete this instance? This action cannot be undone."
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/instances/${instanceId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${session.accessToken}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (data.success) {
+        setInstances((prevInstances) =>
+          prevInstances.filter((instance) => instance.id !== instanceId)
+        );
+        alert("Instance deleted successfully!");
+      } else {
+        alert("Failed to delete instance: " + data.message);
+      }
+    } catch (error) {
+      console.error("Error deleting instance:", error);
+      alert("Failed to delete instance.");
+    }
+  };
+
   const handleCreateInstance = async (e) => {
     e.preventDefault();
     setIsCreating(true);
@@ -226,8 +262,11 @@ export default function InstancePage() {
                     >
                       Created At
                     </th>
-                    <th scope="col" className="relative px-6 py-3">
-                      <span className="sr-only">Edit</span>
+                    <th
+                      scope="col"
+                      className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider"
+                    >
+                      Actions
                     </th>
                   </tr>
                 </thead>
@@ -257,11 +296,17 @@ export default function InstancePage() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         <a
-                          href="#"
-                          className="text-green-600 hover:text-green-900"
+                          href={`/instance/${instance.id}`}
+                          className="text-green-600 hover:text-green-900 font-medium mr-4"
                         >
-                          Edit
+                          View
                         </a>
+                        <button
+                          onClick={() => handleDeleteInstance(instance.id)}
+                          className="text-red-600 hover:text-red-900 font-medium"
+                        >
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   ))}

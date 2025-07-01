@@ -3,6 +3,7 @@
 import { useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { MessageSquare, Phone, Calendar, Clock, X } from "lucide-react";
 import {
   Dialog,
@@ -12,65 +13,71 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { QRCodeCanvas } from "qrcode.react";
+import { useInstanceSocket } from "@/hooks/useInstanceSocket";
 
 export default function InstanceDetailPage() {
   const { data: session } = useSession();
   const params = useParams();
-  const [instance, setInstance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
-  const [qrCode, setQrCode] = useState("");
-  const [qrLoading, setQrLoading] = useState(false);
 
-  const fetchInstance = () => {
+  // Use Socket.IO hook for real-time updates
+  const {
+    instance,
+    qrCode,
+    connectionStatus,
+    error: socketError,
+    updateInstance,
+    clearError,
+    clearQrCode,
+  } = useInstanceSocket(params.id);
+
+  // Initial fetch of instance data
+  const fetchInstance = async () => {
     if (session && params.id) {
       setLoading(true);
-      fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/instances/${params.id}`, {
-        headers: {
-          Authorization: `Bearer ${session.accessToken}`,
-        },
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            setInstance(data.data.instance);
+      try {
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/api/instances/${params.id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${session.accessToken}`,
+            },
           }
-          setLoading(false);
-        })
-        .catch((error) => {
-          console.error("Error fetching instance:", error);
-          setLoading(false);
-        });
+        );
+        const data = await response.json();
+
+        if (data.success) {
+          updateInstance(data.data.instance);
+        }
+      } catch (error) {
+        console.error("Error fetching instance:", error);
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     fetchInstance();
-    if (session && params.id) {
-      fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/instances/${params.id}`, {
-        headers: {
-          Authorization: `Bearer ${session.accessToken}`,
-        },
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.success) {
-            setInstance(data.data.instance);
-          }
-          setLoading(false);
-        })
-        .catch((error) => {
-          console.error("Error fetching instance:", error);
-          setLoading(false);
-        });
-    }
   }, [session, params.id]);
+
+  // Handle QR dialog opening/closing based on connection status
+  useEffect(() => {
+    if (connectionStatus === "QR_REQUIRED" && qrCode) {
+      setIsQrDialogOpen(true);
+    } else if (connectionStatus === "CONNECTED") {
+      setIsQrDialogOpen(false);
+      clearQrCode();
+    }
+  }, [connectionStatus, qrCode, clearQrCode]);
 
   const handleConnect = async () => {
     setIsConnecting(true);
+    clearError();
 
     try {
       const response = await fetch(
@@ -86,9 +93,8 @@ export default function InstanceDetailPage() {
       const data = await response.json();
 
       if (data.success) {
-        // Open QR dialog and start polling for QR code
-        setIsQrDialogOpen(true);
-        fetchQrCode();
+        // Socket.IO will handle the real-time updates
+        console.log("Connection initiated successfully");
       } else {
         alert("Failed to initiate connection: " + data.message);
       }
@@ -100,55 +106,9 @@ export default function InstanceDetailPage() {
     setIsConnecting(false);
   };
 
-  const fetchQrCode = async () => {
-    setQrLoading(true);
-
-    try {
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/instances/${params.id}/qr`,
-        {
-          headers: {
-            Authorization: `Bearer ${session.accessToken}`,
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (data.success && data.data.qrCode) {
-        setQrCode(data.data.qrCode);
-      }
-    } catch (error) {
-      console.error("Error fetching QR code:", error);
-    }
-
-    setQrLoading(false);
-  };
-
-  // QR code polling effect
-  useEffect(() => {
-    let intervalId;
-
-    if (isQrDialogOpen) {
-      // Fetch QR code immediately when dialog opens
-      fetchQrCode();
-
-      // Set up polling every 10 seconds
-      intervalId = setInterval(() => {
-        fetchQrCode();
-      }, 10000);
-    }
-
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
-    };
-  }, [isQrDialogOpen]);
-
   const handleCloseQrDialog = () => {
     setIsQrDialogOpen(false);
-    setQrCode("");
+    clearQrCode();
   };
 
   const handleDisconnect = async () => {
@@ -166,7 +126,7 @@ export default function InstanceDetailPage() {
       const data = await response.json();
       if (data.success) {
         alert("Instance disconnected successfully");
-        fetchInstance();
+        // Socket.IO will handle the real-time status update
       } else {
         alert("Failed to disconnect instance: " + data.message);
       }
@@ -192,7 +152,7 @@ export default function InstanceDetailPage() {
       const data = await response.json();
       if (data.success) {
         alert("Instance restarted successfully");
-        fetchInstance();
+        // Socket.IO will handle the real-time status update
       } else {
         alert("Failed to restart instance: " + data.message);
       }
@@ -201,6 +161,33 @@ export default function InstanceDetailPage() {
       alert("Failed to restart instance");
     }
     setIsRestarting(false);
+  };
+
+  const handleLogout = async () => {
+    if (!confirm("Are you sure you want to log out this instance?")) {
+      return;
+    }
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/instances/${params.id}/logout`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.accessToken}`,
+          },
+        }
+      );
+      const data = await response.json();
+      if (data.success) {
+        alert("Instance logged out successfully!");
+        // Socket.IO will handle the real-time status update
+      } else {
+        alert("Failed to log out instance: " + data.message);
+      }
+    } catch (error) {
+      console.error("Error logging out instance:", error);
+      alert("Failed to log out instance");
+    }
   };
 
   if (loading) {
@@ -240,6 +227,31 @@ export default function InstanceDetailPage() {
   return (
     <>
       <div className="space-y-6">
+        {/* Socket.IO Error Display */}
+        {socketError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex justify-between items-start">
+              <div>
+                <h3 className="text-red-800 font-medium">Real-time Error</h3>
+                <p className="text-red-700 text-sm mt-1">
+                  {socketError.message}
+                </p>
+                {socketError.code && (
+                  <p className="text-red-600 text-xs mt-1">
+                    Code: {socketError.code}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={clearError}
+                className="text-red-400 hover:text-red-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Instance Header */}
         <div className="bg-white rounded-lg shadow-sm p-6">
           <div className="flex items-start justify-between mb-4">
@@ -259,30 +271,31 @@ export default function InstanceDetailPage() {
             <div className="text-right text-slate-500">
               <span
                 className={`px-3 py-1 text-sm font-semibold rounded-full ${
-                  instance.status === "CONNECTED"
+                  connectionStatus === "CONNECTED"
                     ? "bg-green-100 text-green-800"
-                    : instance.status === "CONNECTING"
+                    : connectionStatus === "CONNECTING" ||
+                      connectionStatus === "QR_REQUIRED"
                     ? "bg-yellow-100 text-yellow-800"
-                    : instance.status === "DISCONNECTED"
+                    : connectionStatus === "DISCONNECTED"
                     ? "bg-red-100 text-red-800"
                     : "bg-gray-100 text-gray-800"
                 }`}
               >
-                {instance.status}
+                {connectionStatus}
               </span>
             </div>
           </div>
           <div className="flex gap-3 justify-end">
             <button
               onClick={handleConnect}
-              disabled={instance?.status === "CONNECTED" || isConnecting}
+              disabled={connectionStatus === "CONNECTED" || isConnecting}
               className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-md text-sm font-medium"
             >
               {isConnecting ? "Connecting..." : "Connect Instance"}
             </button>
             <button
               onClick={handleDisconnect}
-              disabled={instance?.status !== "CONNECTED" || isDisconnecting}
+              disabled={connectionStatus !== "CONNECTED" || isDisconnecting}
               className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-md text-sm font-medium"
             >
               {isDisconnecting ? "Disconnecting..." : "Disconnect Instance"}
@@ -293,6 +306,13 @@ export default function InstanceDetailPage() {
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-md text-sm font-medium"
             >
               {isRestarting ? "Restarting..." : "Restart Instance"}
+            </button>
+            <button
+              onClick={handleLogout}
+              disabled={isRestarting}
+              className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-4 py-2 rounded-md text-sm font-medium"
+            >
+              Logout Instance
             </button>
           </div>
         </div>
@@ -323,7 +343,7 @@ export default function InstanceDetailPage() {
                 <label className="text-sm font-medium text-slate-500">
                   Status
                 </label>
-                <div className="text-slate-900">{instance.status}</div>
+                <div className="text-slate-900">{connectionStatus}</div>
               </div>
               <div>
                 <label className="text-sm font-medium text-slate-500">
@@ -504,31 +524,26 @@ export default function InstanceDetailPage() {
           </div>
         )}
       </div>
+
+      {/* QR Code Dialog - Now managed by Socket.IO */}
       <Dialog open={isQrDialogOpen} onOpenChange={setIsQrDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Scan QR Code</DialogTitle>
             <DialogDescription>
               Scan this QR code with your WhatsApp application to connect the
-              instance.
+              instance. The QR code updates automatically.
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-center justify-center p-4">
-            {qrLoading ? (
-              <div className="text-center">
-                <p>Loading QR Code...</p>
-              </div>
-            ) : qrCode ? (
+            {qrCode ? (
               <QRCodeCanvas value={qrCode} size={256} level="H" />
             ) : (
               <div className="text-center">
-                <p>Could not load QR code. Please try again.</p>
-                <button
-                  onClick={fetchQrCode}
-                  className="mt-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md text-sm"
-                >
-                  Retry
-                </button>
+                <p>Waiting for QR code...</p>
+                <div className="mt-2 text-sm text-slate-500">
+                  QR code will appear automatically when ready
+                </div>
               </div>
             )}
           </div>
